@@ -44,7 +44,10 @@ export const initDB = (): Promise<IDBDatabase> => {
                 dbInstance.createObjectStore(PHOTO_STORE, { keyPath: 'id' });
             }
             if (!dbInstance.objectStoreNames.contains(PROFILE_STORE)) {
-                dbInstance.createObjectStore(PROFILE_STORE, { keyPath: 'id' });
+                const profileStore = dbInstance.createObjectStore(PROFILE_STORE, { keyPath: 'id' });
+                // Pre-populate with two empty profiles to ensure stability
+                profileStore.add({ id: 1, file: null });
+                profileStore.add({ id: 2, file: null });
             }
         };
     });
@@ -88,12 +91,9 @@ export const getProfiles = async (): Promise<StoredProfile[]> => {
         const store = transaction.objectStore(PROFILE_STORE);
         const request = store.getAll();
         request.onsuccess = () => {
-            // Provide default profiles if the store is empty
-            if (request.result.length === 0) {
-                 resolve([{ id: 1, file: null }, { id: 2, file: null }]);
-            } else {
-                 resolve(request.result);
-            }
+            // Sort to ensure consistent order [profile1, profile2]
+            const result = request.result.sort((a, b) => a.id - b.id);
+            resolve(result);
         };
         request.onerror = () => {
             console.error('Error getting profiles:', request.error);
