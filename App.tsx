@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
-import type { Photo, Profile, GroupedPhotos } from './types';
+import type { Photo, Profile, GroupedPhotos, StoredPhoto } from './types';
 import PhotoModal from './components/PhotoModal';
 import { initDB, getAllPhotos, addPhoto, getProfiles, updateProfile } from './db';
 
@@ -7,6 +7,9 @@ declare const EXIF: any;
 
 const MONTHS = ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'];
 const YEARS = Array.from({ length: 2030 - 2010 + 1 }, (_, i) => 2010 + i);
+
+// A type for photos held in state, which includes the raw file for creating signatures.
+type AppPhoto = StoredPhoto & { url: string };
 
 const getExifDate = (file: File): Promise<Date> => {
     return new Promise((resolve) => {
@@ -69,12 +72,12 @@ const ProfileCircle: React.FC<{ profile: Profile; onImageDrop: (id: number, file
             onDragLeave={handleDragLeave}
             className={`relative w-24 h-24 sm:w-28 sm:h-28 rounded-full border-4 border-dashed flex items-center justify-center text-center text-xs p-2 transition-all duration-300 ${isDragOver ? 'border-sky-400 bg-slate-700' : 'border-slate-600'}`}
             style={{
-                backgroundImage: `url(${profile.url})`,
+                backgroundImage: `url(${profile?.url})`,
                 backgroundSize: 'cover',
                 backgroundPosition: 'center',
             }}
         >
-            {!profile.url && <span className="text-slate-400">여기에 사진 드롭</span>}
+            {!profile?.url && <span className="text-slate-400">여기에 사진 드롭</span>}
         </div>
     );
 };
@@ -83,12 +86,12 @@ const ProfileCircle: React.FC<{ profile: Profile; onImageDrop: (id: number, file
 const App: React.FC = () => {
   const [accessGranted, setAccessGranted] = useState(false);
   const [requestSent, setRequestSent] = useState(false);
-  const [allPhotos, setAllPhotos] = useState<Photo[]>([]);
+  const [allPhotos, setAllPhotos] = useState<AppPhoto[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([
       { id: 1, url: null },
       { id: 2, url: null }
   ]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [uploadProgress, setUploadProgress] = useState({ processed: 0, total: 0 });
   const [currentFileName, setCurrentFileName] = useState<string | null>(null);
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
@@ -99,6 +102,8 @@ const App: React.FC = () => {
     // Check for access on initial load
     if (localStorage.getItem('albumAccessGranted') === 'true') {
         setAccessGranted(true);
+    } else {
+        setIsLoading(false);
     }
   }, []);
 
@@ -111,7 +116,7 @@ const App: React.FC = () => {
             await initDB();
             
             const dbPhotos = await getAllPhotos();
-            const photosWithUrls = dbPhotos.map(p => ({
+            const photosWithUrls: AppPhoto[] = dbPhotos.map(p => ({
                 ...p,
                 url: URL.createObjectURL(p.file)
             }));
@@ -142,13 +147,9 @@ const App: React.FC = () => {
     setUploadProgress({ processed: 0, total: files.length });
     setCurrentFileName(null);
     
-    // Create a set of signatures from existing photos to check for duplicates.
-    // The `file` property exists on photos loaded from DB, even if not in the Photo type.
-    const existingPhotoSignatures = new Set(
-      allPhotos.map((p: any) => p.file ? `${p.file.name}-${p.file.lastModified}-${p.file.size}` : p.id)
-    );
+    const existingPhotoIds = new Set(allPhotos.map(p => p.id));
     
-    const newPhotosToAdd: any[] = [];
+    const newPhotosToAdd: AppPhoto[] = [];
 
     for (let i = 0; i < files.length; i++) {
         const file = files[i];
@@ -156,8 +157,8 @@ const App: React.FC = () => {
         
         const fileSignature = `${file.name}-${file.lastModified}-${file.size}`;
 
-        // Check if the photo signature already exists.
-        if (existingPhotoSignatures.has(fileSignature)) {
+        // Check if the photo ID already exists.
+        if (existingPhotoIds.has(fileSignature)) {
             console.log(`Skipping duplicate file: ${file.name}`);
             setUploadProgress(prev => ({ ...prev, processed: prev.processed + 1 }));
             continue;
@@ -168,10 +169,11 @@ const App: React.FC = () => {
         const type = file.type.startsWith('video/') ? 'video' : 'image';
         
         try {
-            await addPhoto({ id, file, name: file.name, date, type });
+            const photoToAdd: StoredPhoto = { id, file, name: file.name, date, type };
+            await addPhoto(photoToAdd);
             const url = URL.createObjectURL(file);
-            newPhotosToAdd.push({ id, url, name: file.name, date, type, file });
-            existingPhotoSignatures.add(fileSignature); // Add signature to set to check against other files in the same batch.
+            newPhotosToAdd.push({ ...photoToAdd, url });
+            existingPhotoIds.add(fileSignature); // Add signature to set to check against other files in the same batch.
         } catch (error: any) {
             if (error.name === 'ConstraintError') {
                 console.log(`Skipping duplicate file (already in DB): ${file.name}`);
@@ -302,7 +304,7 @@ const App: React.FC = () => {
             </label>
           </div>
 
-          {isLoading && (
+          {isLoading && uploadProgress.total > 0 && (
             <div className="max-w-2xl mx-auto my-8 px-4">
               <div className="text-center mb-4">
                 <p className="text-lg font-semibold text-sky-400">파일 처리 중...</p>

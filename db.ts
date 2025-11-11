@@ -1,19 +1,7 @@
-// The data we store in IndexedDB. We store the File object itself.
-interface StoredPhoto {
-    id: string;
-    file: File;
-    name: string;
-    date: Date;
-    type: 'image' | 'video';
-}
-
-interface StoredProfile {
-    id: number;
-    file: File | null;
-}
+import type { StoredPhoto, StoredProfile } from './types';
 
 const DB_NAME = 'PhotoAlbumDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Incremented version to trigger upgrade for all users
 const PHOTO_STORE = 'photos';
 const PROFILE_STORE = 'profiles';
 
@@ -43,11 +31,26 @@ export const initDB = (): Promise<IDBDatabase> => {
             if (!dbInstance.objectStoreNames.contains(PHOTO_STORE)) {
                 dbInstance.createObjectStore(PHOTO_STORE, { keyPath: 'id' });
             }
+            
+            let profileStore;
             if (!dbInstance.objectStoreNames.contains(PROFILE_STORE)) {
-                const profileStore = dbInstance.createObjectStore(PROFILE_STORE, { keyPath: 'id' });
-                // Pre-populate with two empty profiles to ensure stability
+                profileStore = dbInstance.createObjectStore(PROFILE_STORE, { keyPath: 'id' });
+                 // If creating for the first time, add placeholders
                 profileStore.add({ id: 1, file: null });
                 profileStore.add({ id: 2, file: null });
+            } else {
+                // If store exists, this is an upgrade. Ensure placeholders exist without overwriting.
+                profileStore = (event.target as IDBOpenDBRequest).transaction!.objectStore(PROFILE_STORE);
+                profileStore.get(1).onsuccess = (e) => {
+                    if (!(e.target as IDBRequest).result) {
+                        profileStore.add({ id: 1, file: null });
+                    }
+                };
+                profileStore.get(2).onsuccess = (e) => {
+                    if (!(e.target as IDBRequest).result) {
+                        profileStore.add({ id: 2, file: null });
+                    }
+                };
             }
         };
     });
@@ -91,13 +94,19 @@ export const getProfiles = async (): Promise<StoredProfile[]> => {
         const store = transaction.objectStore(PROFILE_STORE);
         const request = store.getAll();
         request.onsuccess = () => {
-            // Sort to ensure consistent order [profile1, profile2]
-            const result = request.result.sort((a, b) => a.id - b.id);
-            resolve(result);
+            const results = request.result || [];
+            // Ensure we always return two profiles to prevent rendering crashes
+            const profile1 = results.find(p => p.id === 1) || { id: 1, file: null };
+            const profile2 = results.find(p => p.id === 2) || { id: 2, file: null };
+            resolve([profile1, profile2]);
         };
         request.onerror = () => {
             console.error('Error getting profiles:', request.error);
-            reject(request.error);
+             // On failure, return defaults to prevent UI crash
+            resolve([
+                { id: 1, file: null },
+                { id: 2, file: null },
+            ]);
         };
     });
 };
