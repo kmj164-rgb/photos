@@ -142,32 +142,55 @@ const App: React.FC = () => {
     setUploadProgress({ processed: 0, total: files.length });
     setCurrentFileName(null);
     
-    const newPhotosForState: Photo[] = [];
+    // Create a set of signatures from existing photos to check for duplicates.
+    // The `file` property exists on photos loaded from DB, even if not in the Photo type.
+    const existingPhotoSignatures = new Set(
+      allPhotos.map((p: any) => p.file ? `${p.file.name}-${p.file.lastModified}-${p.file.size}` : p.id)
+    );
+    
+    const newPhotosToAdd: any[] = [];
+
     for (let i = 0; i < files.length; i++) {
         const file = files[i];
         setCurrentFileName(file.name);
         
+        const fileSignature = `${file.name}-${file.lastModified}-${file.size}`;
+
+        // Check if the photo signature already exists.
+        if (existingPhotoSignatures.has(fileSignature)) {
+            console.log(`Skipping duplicate file: ${file.name}`);
+            setUploadProgress(prev => ({ ...prev, processed: prev.processed + 1 }));
+            continue;
+        }
+        
         const date = await getExifDate(file);
-        const id = `${file.name}-${file.lastModified}-${Math.random()}`;
+        const id = fileSignature; // Use the signature as the unique, deterministic ID.
         const type = file.type.startsWith('video/') ? 'video' : 'image';
         
         try {
             await addPhoto({ id, file, name: file.name, date, type });
             const url = URL.createObjectURL(file);
-            newPhotosForState.push({ id, url, name: file.name, date, type });
-        } catch (error) {
-            console.error("Failed to save photo to DB", error);
+            newPhotosToAdd.push({ id, url, name: file.name, date, type, file });
+            existingPhotoSignatures.add(fileSignature); // Add signature to set to check against other files in the same batch.
+        } catch (error: any) {
+            if (error.name === 'ConstraintError') {
+                console.log(`Skipping duplicate file (already in DB): ${file.name}`);
+            } else {
+                console.error("Failed to save photo to DB", error);
+            }
         }
         
         setUploadProgress(prev => ({ ...prev, processed: prev.processed + 1 }));
     }
 
-    setAllPhotos(prev => [...prev, ...newPhotosForState].sort((a,b) => b.date.getTime() - a.date.getTime()));
+    if (newPhotosToAdd.length > 0) {
+      setAllPhotos(prev => [...prev, ...newPhotosToAdd].sort((a,b) => b.date.getTime() - a.date.getTime()));
+    }
+    
     setIsLoading(false);
     setCurrentFileName(null);
-    
     event.target.value = '';
-  }, []);
+  }, [allPhotos]);
   
   const handleProfileDrop = useCallback(async (id: number, file: File) => {
       try {
