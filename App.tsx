@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import type { Photo, Profile, GroupedPhotos } from './types';
 import PhotoModal from './components/PhotoModal';
+import { initDB, getAllPhotos, addPhoto, getProfiles, updateProfile } from './db';
 
 declare const EXIF: any;
 
@@ -103,38 +104,35 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!accessGranted) return;
-    try {
-        const storedPhotos = localStorage.getItem('allPhotos');
-        const storedProfiles = localStorage.getItem('profiles');
-        if (storedPhotos) {
-            const parsedPhotos: Photo[] = JSON.parse(storedPhotos);
-            // Date strings need to be converted back to Date objects
-            parsedPhotos.forEach(p => p.date = new Date(p.date));
-            setAllPhotos(parsedPhotos);
+
+    const loadFromDB = async () => {
+        setIsLoading(true);
+        try {
+            await initDB();
+            
+            const dbPhotos = await getAllPhotos();
+            const photosWithUrls = dbPhotos.map(p => ({
+                ...p,
+                url: URL.createObjectURL(p.file)
+            }));
+            setAllPhotos(photosWithUrls.sort((a, b) => b.date.getTime() - a.date.getTime()));
+
+            const dbProfiles = await getProfiles();
+            const profilesWithUrls = dbProfiles.map(p => ({
+                id: p.id,
+                url: p.file ? URL.createObjectURL(p.file) : null
+            }));
+            setProfiles(profilesWithUrls);
+
+        } catch (error) {
+            console.error("Failed to load data from IndexedDB", error);
+        } finally {
+            setIsLoading(false);
         }
-        if (storedProfiles) setProfiles(JSON.parse(storedProfiles));
-    } catch (error) {
-        console.error("Failed to load data from localStorage", error);
-    }
+    };
+
+    loadFromDB();
   }, [accessGranted]);
-
-  useEffect(() => {
-    if (!accessGranted) return;
-    try {
-        localStorage.setItem('allPhotos', JSON.stringify(allPhotos));
-    } catch (error) {
-        console.error("Failed to save photos to localStorage", error);
-    }
-  }, [allPhotos, accessGranted]);
-
-  useEffect(() => {
-    if (!accessGranted) return;
-    try {
-        localStorage.setItem('profiles', JSON.stringify(profiles));
-    } catch (error) {
-        console.error("Failed to save profiles to localStorage", error);
-    }
-  }, [profiles, accessGranted]);
   
   const handleFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -144,35 +142,41 @@ const App: React.FC = () => {
     setUploadProgress({ processed: 0, total: files.length });
     setCurrentFileName(null);
     
-    const newPhotos: Photo[] = [];
+    const newPhotosForState: Photo[] = [];
     for (let i = 0; i < files.length; i++) {
         const file = files[i];
         setCurrentFileName(file.name);
         
         const date = await getExifDate(file);
-        const url = URL.createObjectURL(file);
-        const photo: Photo = {
-            id: `${file.name}-${file.lastModified}-${Math.random()}`,
-            url,
-            name: file.name,
-            date,
-            type: file.type.startsWith('video/') ? 'video' : 'image',
-        };
+        const id = `${file.name}-${file.lastModified}-${Math.random()}`;
+        const type = file.type.startsWith('video/') ? 'video' : 'image';
         
-        newPhotos.push(photo);
+        try {
+            await addPhoto({ id, file, name: file.name, date, type });
+            const url = URL.createObjectURL(file);
+            newPhotosForState.push({ id, url, name: file.name, date, type });
+        } catch (error) {
+            console.error("Failed to save photo to DB", error);
+        }
+        
         setUploadProgress(prev => ({ ...prev, processed: prev.processed + 1 }));
     }
 
-    setAllPhotos(prev => [...prev, ...newPhotos].sort((a,b) => b.date.getTime() - a.date.getTime()));
+    setAllPhotos(prev => [...prev, ...newPhotosForState].sort((a,b) => b.date.getTime() - a.date.getTime()));
     setIsLoading(false);
     setCurrentFileName(null);
     
     event.target.value = '';
   }, []);
   
-  const handleProfileDrop = useCallback((id: number, file: File) => {
-      const url = URL.createObjectURL(file);
-      setProfiles(prev => prev.map(p => p.id === id ? { ...p, url } : p));
+  const handleProfileDrop = useCallback(async (id: number, file: File) => {
+      try {
+        await updateProfile(id, file);
+        const url = URL.createObjectURL(file);
+        setProfiles(prev => prev.map(p => p.id === id ? { ...p, url } : p));
+      } catch (error) {
+        console.error("Failed to update profile picture in DB", error);
+      }
   }, []);
 
   const photosByYear = useMemo(() => {
