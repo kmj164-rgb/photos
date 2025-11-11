@@ -1,0 +1,5 @@
+{
+  "name": "Photo Organizer by Date",
+  "description": "An application that allows users to upload photos from their device and automatically organizes them by year and month for easy viewing.",
+  "requestFramePermissions": []
+}
