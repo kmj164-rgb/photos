@@ -6,7 +6,7 @@ export interface Photo {
   type: 'image' | 'video';
 }
 
-// Data structure for IndexedDB
+// IndexedDB에 저장될 데이터 구조
 export interface StoredPhoto {
     id: string;
     file: File;
@@ -15,14 +15,4 @@ export interface StoredPhoto {
     type: 'image' | 'video';
 }
 
-export interface StoredProfile {
-    id: number;
-    file: File | null;
-}
-
 export type GroupedPhotos = Record<number, Record<string, Photo[]>>;
-
-export interface Profile {
-  id: number;
-  url: string | null;
-}

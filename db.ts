@@ -1,23 +1,21 @@
-import type { StoredPhoto, StoredProfile } from './types';
+import type { StoredPhoto } from './types';
 
 const DB_NAME = 'PhotoAlbumDB';
-const DB_VERSION = 2; // Incremented version to trigger upgrade for all users
+const DB_VERSION = 4; // DB 버전을 올려서 스키마 변경을 트리거합니다.
 const PHOTO_STORE = 'photos';
-const PROFILE_STORE = 'profiles';
 
 let db: IDBDatabase;
 
-// Function to initialize the database
+// 데이터베이스 초기화 함수
 export const initDB = (): Promise<IDBDatabase> => {
     return new Promise((resolve, reject) => {
-        // If db is already initialized, return it
         if (db) return resolve(db);
 
         const request = indexedDB.open(DB_NAME, DB_VERSION);
 
         request.onerror = () => {
             console.error('Database error:', request.error);
-            reject('Error opening database');
+            reject('데이터베이스를 여는 중 오류가 발생했습니다.');
         };
 
         request.onsuccess = () => {
@@ -25,38 +23,24 @@ export const initDB = (): Promise<IDBDatabase> => {
             resolve(db);
         };
 
-        // This event is only fired when the version changes
+        // 버전이 변경될 때만 실행됩니다.
         request.onupgradeneeded = (event) => {
             const dbInstance = (event.target as IDBOpenDBRequest).result;
+
+            // 'photos' 저장소가 없으면 생성합니다.
             if (!dbInstance.objectStoreNames.contains(PHOTO_STORE)) {
                 dbInstance.createObjectStore(PHOTO_STORE, { keyPath: 'id' });
             }
             
-            let profileStore;
-            if (!dbInstance.objectStoreNames.contains(PROFILE_STORE)) {
-                profileStore = dbInstance.createObjectStore(PROFILE_STORE, { keyPath: 'id' });
-                 // If creating for the first time, add placeholders
-                profileStore.add({ id: 1, file: null });
-                profileStore.add({ id: 2, file: null });
-            } else {
-                // If store exists, this is an upgrade. Ensure placeholders exist without overwriting.
-                profileStore = (event.target as IDBOpenDBRequest).transaction!.objectStore(PROFILE_STORE);
-                profileStore.get(1).onsuccess = (e) => {
-                    if (!(e.target as IDBRequest).result) {
-                        profileStore.add({ id: 1, file: null });
-                    }
-                };
-                profileStore.get(2).onsuccess = (e) => {
-                    if (!(e.target as IDBRequest).result) {
-                        profileStore.add({ id: 2, file: null });
-                    }
-                };
+            // 이전 버전의 'profiles' 저장소가 있으면 삭제합니다.
+            if (dbInstance.objectStoreNames.contains('profiles')) {
+                dbInstance.deleteObjectStore('profiles');
             }
         };
     });
 };
 
-// Add a new photo to the database
+// 새 사진을 데이터베이스에 추가하는 함수
 export const addPhoto = async (photo: StoredPhoto): Promise<void> => {
     const db = await initDB();
     return new Promise((resolve, reject) => {
@@ -65,13 +49,13 @@ export const addPhoto = async (photo: StoredPhoto): Promise<void> => {
         const request = store.add(photo);
         request.onsuccess = () => resolve();
         request.onerror = () => {
-            console.error('Error adding photo:', request.error);
+            console.error('사진 추가 오류:', request.error);
             reject(request.error);
         };
     });
 };
 
-// Retrieve all photos from the database
+// 데이터베이스에서 모든 사진을 가져오는 함수
 export const getAllPhotos = async (): Promise<StoredPhoto[]> => {
     const db = await initDB();
     return new Promise((resolve, reject) => {
@@ -80,47 +64,7 @@ export const getAllPhotos = async (): Promise<StoredPhoto[]> => {
         const request = store.getAll();
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => {
-            console.error('Error getting all photos:', request.error);
-            reject(request.error);
-        };
-    });
-};
-
-// Retrieve profiles from the database
-export const getProfiles = async (): Promise<StoredProfile[]> => {
-    const db = await initDB();
-    return new Promise((resolve, reject) => {
-        const transaction = db.transaction(PROFILE_STORE, 'readonly');
-        const store = transaction.objectStore(PROFILE_STORE);
-        const request = store.getAll();
-        request.onsuccess = () => {
-            const results = request.result || [];
-            // Ensure we always return two profiles to prevent rendering crashes
-            const profile1 = results.find(p => p.id === 1) || { id: 1, file: null };
-            const profile2 = results.find(p => p.id === 2) || { id: 2, file: null };
-            resolve([profile1, profile2]);
-        };
-        request.onerror = () => {
-            console.error('Error getting profiles:', request.error);
-             // On failure, return defaults to prevent UI crash
-            resolve([
-                { id: 1, file: null },
-                { id: 2, file: null },
-            ]);
-        };
-    });
-};
-
-// Update a profile picture in the database
-export const updateProfile = async (id: number, file: File): Promise<void> => {
-    const db = await initDB();
-    return new Promise((resolve, reject) => {
-        const transaction = db.transaction(PROFILE_STORE, 'readwrite');
-        const store = transaction.objectStore(PROFILE_STORE);
-        const request = store.put({ id, file });
-        request.onsuccess = () => resolve();
-        request.onerror = () => {
-            console.error('Error updating profile:', request.error);
+            console.error('모든 사진 가져오기 오류:', request.error);
             reject(request.error);
         };
     });
