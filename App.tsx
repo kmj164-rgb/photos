@@ -145,7 +145,7 @@ const App: React.FC = () => {
 
         } catch (error) {
             console.error("Failed to load data from Firebase", error);
-            alert("데이터를 불러오는 데 실패했습니다. firebase.ts 파일에 Firebase 설정이 올바르게 입력되었는지, 그리고 Firestore와 Storage의 보안 규칙이 데이터 접근을 허용하는지 확인해주세요.");
+            alert("데이터를 불러오는 데 실패했습니다. Firebase 설정을 확인해주세요.");
         }
         setIsLoading(false);
         setIsInitialLoad(false);
