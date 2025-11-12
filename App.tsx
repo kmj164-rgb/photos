@@ -85,8 +85,8 @@ const App: React.FC = () => {
   const [requestSent, setRequestSent] = useState(false);
   const [allPhotos, setAllPhotos] = useState<Photo[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([
-      { id: 1, url: 'https://storage.googleapis.com/aistudio-hosting/workspace-assets/google-project-media/35d09ec3-e18e-4a64-9b88-14227c8a6660' },
-      { id: 2, url: 'https://storage.googleapis.com/aistudio-hosting/workspace-assets/google-project-media/a511388b-82ee-489e-b8d1-7c9979705a61' }
+      { id: 1, url: 'https://storage.googleapis.com/aistudio-hosting/workspace-assets/google-project-media/484a084c-31d4-4a53-8b77-3e28080f3a3a' },
+      { id: 2, url: 'https://storage.googleapis.com/aistudio-hosting/workspace-assets/google-project-media/16c6424e-728b-4b47-8f85-78c6411f7c6e' }
   ]);
   const [isLoading, setIsLoading] = useState(false);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
