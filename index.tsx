@@ -1,7 +1,7 @@
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-// FIX: Changed to a named import to resolve the "no default export" error.
-import { App } from './App';
+import App from './App';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

@@ -1,12 +1,12 @@
-import type { StoredPhoto } from './types';
+import type { Photo, Profile } from './types';
 
 const DB_NAME = 'PhotoAlbumDB';
-const DB_VERSION = 4; // DB 버전을 올려서 스키마 변경을 트리거합니다.
+const DB_VERSION = 5; // Increment version for schema change
 const PHOTO_STORE = 'photos';
+const PROFILE_STORE = 'profiles';
 
 let db: IDBDatabase;
 
-// 데이터베이스 초기화 함수
 export const initDB = (): Promise<IDBDatabase> => {
     return new Promise((resolve, reject) => {
         if (db) return resolve(db);
@@ -23,40 +23,41 @@ export const initDB = (): Promise<IDBDatabase> => {
             resolve(db);
         };
 
-        // 버전이 변경될 때만 실행됩니다.
         request.onupgradeneeded = (event) => {
             const dbInstance = (event.target as IDBOpenDBRequest).result;
 
-            // 'photos' 저장소가 없으면 생성합니다.
             if (!dbInstance.objectStoreNames.contains(PHOTO_STORE)) {
                 dbInstance.createObjectStore(PHOTO_STORE, { keyPath: 'id' });
             }
-            
-            // 이전 버전의 'profiles' 저장소가 있으면 삭제합니다.
-            if (dbInstance.objectStoreNames.contains('profiles')) {
-                dbInstance.deleteObjectStore('profiles');
+            if (!dbInstance.objectStoreNames.contains(PROFILE_STORE)) {
+                dbInstance.createObjectStore(PROFILE_STORE, { keyPath: 'id' });
             }
         };
     });
 };
 
-// 새 사진을 데이터베이스에 추가하는 함수
-export const addPhoto = async (photo: StoredPhoto): Promise<void> => {
+export const addPhoto = async (photo: Photo): Promise<void> => {
     const db = await initDB();
     return new Promise((resolve, reject) => {
         const transaction = db.transaction(PHOTO_STORE, 'readwrite');
         const store = transaction.objectStore(PHOTO_STORE);
-        const request = store.add(photo);
+        
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { url, ...storablePhoto } = photo;
+        if (!storablePhoto.file) {
+            return reject('Photo object must have a file to be stored.');
+        }
+
+        const request = store.add(storablePhoto);
         request.onsuccess = () => resolve();
         request.onerror = () => {
-            console.error('사진 추가 오류:', request.error);
+            console.error('Error adding photo:', request.error);
             reject(request.error);
         };
     });
 };
 
-// 데이터베이스에서 모든 사진을 가져오는 함수
-export const getAllPhotos = async (): Promise<StoredPhoto[]> => {
+export const getAllPhotos = async (): Promise<Photo[]> => {
     const db = await initDB();
     return new Promise((resolve, reject) => {
         const transaction = db.transaction(PHOTO_STORE, 'readonly');
@@ -64,7 +65,42 @@ export const getAllPhotos = async (): Promise<StoredPhoto[]> => {
         const request = store.getAll();
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => {
-            console.error('모든 사진 가져오기 오류:', request.error);
+            console.error('Error getting all photos:', request.error);
+            reject(request.error);
+        };
+    });
+};
+
+export const saveProfile = async (profile: Profile): Promise<void> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(PROFILE_STORE, 'readwrite');
+        const store = transaction.objectStore(PROFILE_STORE);
+        
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { url, ...storableProfile } = profile;
+        if (!storableProfile.file) {
+            return reject('Profile object must have a file to be stored.');
+        }
+
+        const request = store.put(storableProfile); // Use put to overwrite existing
+        request.onsuccess = () => resolve();
+        request.onerror = () => {
+            console.error('Error saving profile:', request.error);
+            reject(request.error);
+        };
+    });
+};
+
+export const getAllProfiles = async (): Promise<Profile[]> => {
+    const db = await initDB();
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(PROFILE_STORE, 'readonly');
+        const store = transaction.objectStore(PROFILE_STORE);
+        const request = store.getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => {
+            console.error('Error getting all profiles:', request.error);
             reject(request.error);
         };
     });
