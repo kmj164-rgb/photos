@@ -4,7 +4,6 @@ import PhotoModal from './components/PhotoModal';
 import { getAllPhotos, addPhoto, getAllProfiles, saveProfile } from './db';
 
 declare const EXIF: any;
-declare const JSZip: any;
 
 const MONTHS = ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'];
 const YEARS = Array.from({ length: 2030 - 2010 + 1 }, (_, i) => 2010 + i);
@@ -41,14 +40,6 @@ const UploadIcon: React.FC = () => (
         <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
     </svg>
 );
-
-const SpinnerMini: React.FC = () => (
-    <svg className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-    </svg>
-);
-
 
 const ProfileCircle: React.FC<{ profile: Profile; onImageDrop: (id: number, file: File) => void }> = ({ profile, onImageDrop }) => {
     const [isDragOver, setIsDragOver] = useState(false);
@@ -107,11 +98,6 @@ const App: React.FC = () => {
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [filterType, setFilterType] = useState<'all' | 'image' | 'video'>('all');
 
-  const [isSelectionMode, setIsSelectionMode] = useState(false);
-  const [selectedPhotos, setSelectedPhotos] = useState<Set<string>>(new Set());
-  const [isZipping, setIsZipping] = useState(false);
-
-
   useEffect(() => {
     if (localStorage.getItem('albumAccessGranted') === 'true') {
         setAccessGranted(true);
@@ -142,7 +128,7 @@ const App: React.FC = () => {
             }
 
         } catch (error) {
-            console.error("Failed to load data from localStorage", error);
+            console.error("Failed to load data from IndexedDB", error);
         }
         setIsLoading(false);
         setIsInitialLoad(false);
@@ -194,14 +180,10 @@ const App: React.FC = () => {
             type: file.type.startsWith('video/') ? 'video' : 'image',
         };
         
-        try {
-            await addPhoto(photo);
-            newPhotos.push(photo);
-        } catch (error) {
-            // Error is handled and alerted in addPhoto, just stop processing this batch
-            console.error("Stopping upload due to storage error.");
-            break; 
-        }
+        await addPhoto(photo);
+        
+        const { file: _, ...displayPhoto } = photo;
+        newPhotos.push(displayPhoto);
         setUploadProgress(prev => ({ ...prev, processed: prev.processed + 1 }));
     }
 
@@ -216,7 +198,7 @@ const App: React.FC = () => {
       const url = URL.createObjectURL(file);
       const profile: Profile = { id, url, file };
       await saveProfile(profile);
-      setProfiles(prev => prev.map(p => p.id === id ? { ...p, url, file } : p));
+      setProfiles(prev => prev.map(p => p.id === id ? { ...p, url } : p));
   }, []);
 
   const photosByYear = useMemo(() => {
@@ -245,63 +227,6 @@ const App: React.FC = () => {
           setSelectedPhotoIndex(index);
       }
   };
-
-  const handlePhotoGridClick = (photo: Photo) => {
-    if (isSelectionMode) {
-      const newSelection = new Set(selectedPhotos);
-      if (newSelection.has(photo.id)) {
-        newSelection.delete(photo.id);
-      } else {
-        newSelection.add(photo.id);
-      }
-      setSelectedPhotos(newSelection);
-    } else {
-      handlePhotoClick(photo);
-    }
-  };
-
-  const handleSelectAll = () => {
-    const allIdsInView = photosInCurrentView.map(p => p.id);
-    setSelectedPhotos(new Set(allIdsInView));
-  };
-
-  const handleDownloadSelected = async () => {
-    if (selectedPhotos.size === 0) return;
-    setIsZipping(true);
-
-    try {
-        const photosToZip = allPhotos.filter(p => selectedPhotos.has(p.id));
-        if (photosToZip.length === 0) {
-            throw new Error("선택된 사진을 찾을 수 없습니다.");
-        }
-
-        const zip = new JSZip();
-        photosToZip.forEach(photo => {
-            if (photo.file) {
-                zip.file(photo.name, photo.file);
-            }
-        });
-
-        const content = await zip.generateAsync({ type: "blob" });
-
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(content);
-        link.download = `사진모음_${new Date().toISOString().split('T')[0]}.zip`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(link.href);
-
-        setIsSelectionMode(false);
-        setSelectedPhotos(new Set());
-    } catch (error) {
-        console.error("다운로드 중 오류 발생:", error);
-        alert("사진을 다운로드하는 중 오류가 발생했습니다.");
-    } finally {
-        setIsZipping(false);
-    }
-  };
-
 
   const handleNavigateModal = (newIndex: number) => {
     if (newIndex >= 0 && newIndex < photosInCurrentView.length) {
@@ -430,7 +355,7 @@ const App: React.FC = () => {
           </nav>
           
           {selectedYear && selectedMonth && (
-            <div className="flex justify-center items-center gap-4 mb-8">
+            <div className="flex justify-center gap-4 mb-8">
               <button onClick={() => setFilterType('all')} className={`px-4 py-2 rounded font-semibold transition-colors ${filterType === 'all' ? 'bg-sky-500 text-white' : 'bg-slate-700 hover:bg-slate-600'}`}>
                 모두
               </button>
@@ -439,15 +364,6 @@ const App: React.FC = () => {
               </button>
               <button onClick={() => setFilterType('video')} className={`px-4 py-2 rounded font-semibold transition-colors ${filterType === 'video' ? 'bg-sky-500 text-white' : 'bg-slate-700 hover:bg-slate-600'}`}>
                 동영상
-              </button>
-              <button
-                onClick={() => {
-                  setIsSelectionMode(!isSelectionMode);
-                  setSelectedPhotos(new Set());
-                }}
-                className={`px-4 py-2 rounded font-semibold transition-colors ${isSelectionMode ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-indigo-500 hover:bg-indigo-600 text-white'}`}
-                >
-                {isSelectionMode ? '취소' : '선택'}
               </button>
             </div>
           )}
@@ -474,68 +390,29 @@ const App: React.FC = () => {
                     {selectedYear}년 {selectedMonth}
                 </h2>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-                    {photosInCurrentView.map(photo => {
-                        const isSelected = isSelectionMode && selectedPhotos.has(photo.id);
-                        return (
-                        <div key={photo.id} className={`aspect-square bg-slate-800 rounded-lg overflow-hidden cursor-pointer group relative transition-all duration-200 ${isSelected ? 'ring-4 ring-sky-500 scale-95' : ''}`} onClick={() => handlePhotoGridClick(photo)}>
-                            {photo.type === 'image' ? (
-                                <img src={photo.url} alt={photo.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"/>
-                            ) : (
-                                <video src={photo.url} muted loop className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300" />
-                            )}
-                            <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-40 transition-opacity duration-300"></div>
-                            
-                            {isSelectionMode && (
-                                <div className={`absolute inset-0 flex items-center justify-center transition-all ${isSelected ? 'bg-sky-600/60' : 'bg-black/40 opacity-0 group-hover:opacity-100'}`}>
-                                    <div className={`w-8 h-8 rounded-full border-2 flex items-center justify-center ${isSelected ? 'border-sky-300 bg-sky-500' : 'border-white bg-black/30'}`}>
-                                        {isSelected && (
-                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                                              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                                            </svg>
-                                        )}
-                                    </div>
-                                </div>
-                            )}
-
-                            {photo.type === 'video' && !isSelectionMode && (
-                                <div className="absolute top-2 right-2 text-white bg-black bg-opacity-50 p-1 rounded-full">
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                                        <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2-2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 001.553.832l3-2a1 1 0 000-1.664l-3-2z" />
-                                    </svg>
-                                </div>
-                            )}
-                        </div>
-                        )
-                    })}
+                    {photosInCurrentView.map(photo => (
+                    <div key={photo.id} className="aspect-square bg-slate-800 rounded-lg overflow-hidden cursor-pointer group relative" onClick={() => handlePhotoClick(photo)}>
+                        {photo.type === 'image' ? (
+                            <img src={photo.url} alt={photo.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"/>
+                        ) : (
+                            <video src={photo.url} muted loop className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300" />
+                        )}
+                        <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-40 transition-opacity duration-300"></div>
+                        {photo.type === 'video' && (
+                             <div className="absolute top-2 right-2 text-white bg-black bg-opacity-50 p-1 rounded-full">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                    <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 001.553.832l3-2a1 1 0 000-1.664l-3-2z" />
+                                </svg>
+                            </div>
+                        )}
+                    </div>
+                    ))}
                 </div>
             </section>
           )}
 
         </main>
       </div>
-
-      {isSelectionMode && selectedPhotos.size > 0 && (
-          <div className="fixed bottom-0 left-0 right-0 bg-slate-800/90 backdrop-blur-sm border-t border-slate-700 p-4 shadow-lg z-40 flex items-center justify-between animate-fade-in-up">
-              <span className="font-semibold text-lg">{selectedPhotos.size}개 항목 선택됨</span>
-              <div className="flex gap-4">
-                  <button onClick={handleSelectAll} className="px-4 py-2 rounded bg-slate-600 hover:bg-slate-500 font-semibold transition-colors">모두 선택</button>
-                  <button 
-                      onClick={handleDownloadSelected} 
-                      className="px-6 py-2 rounded bg-sky-500 hover:bg-sky-600 text-white font-bold flex items-center gap-2 transition-colors disabled:bg-sky-800 disabled:cursor-not-allowed"
-                      disabled={isZipping}
-                  >
-                      {isZipping ? (
-                          <>
-                          <SpinnerMini />
-                          압축 중...
-                          </>
-                      ) : '다운로드'}
-                  </button>
-              </div>
-          </div>
-      )}
-
-
       <PhotoModal 
         photos={photosInCurrentView} 
         currentIndex={selectedPhotoIndex} 
