@@ -33,6 +33,17 @@ const PhotoModal: React.FC<PhotoModalProps> = ({ photos, currentIndex, onClose, 
   const canNavigatePrev = currentIndex > 0;
   const canNavigateNext = currentIndex < photos.length - 1;
 
+  const handleDownload = () => {
+    if (!photo) return;
+
+    const link = document.createElement('a');
+    link.href = photo.url;
+    link.download = photo.name;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div
       className="fixed inset-0 bg-black bg-opacity-90 flex justify-center items-center z-50 p-4"
@@ -48,6 +59,17 @@ const PhotoModal: React.FC<PhotoModalProps> = ({ photos, currentIndex, onClose, 
           aria-label="Close"
         >
           &times;
+        </button>
+
+        <button
+          onClick={handleDownload}
+          className="absolute top-4 right-4 bg-slate-700/80 text-white rounded-full p-3 hover:bg-slate-600 transition-colors z-20"
+          aria-label="다운로드"
+          title="다운로드"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+          </svg>
         </button>
         
         <div className="w-full h-full flex items-center justify-center">
