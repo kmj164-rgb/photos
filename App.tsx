@@ -42,6 +42,13 @@ const UploadIcon: React.FC = () => (
     </svg>
 );
 
+const EmptyAlbumIcon: React.FC = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 text-slate-600 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+    </svg>
+);
+
+
 const SpinnerMini: React.FC = () => (
     <svg className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
@@ -113,6 +120,7 @@ const App: React.FC = () => {
 
 
   useEffect(() => {
+    // This simple access control can be replaced with Firebase Auth for real user management.
     if (localStorage.getItem('albumAccessGranted') === 'true') {
         setAccessGranted(true);
     }
@@ -125,24 +133,19 @@ const App: React.FC = () => {
         setIsLoading(true);
         try {
             const [storedPhotos, storedProfiles] = await Promise.all([getAllPhotos(), getAllProfiles()]);
-
-            const photosWithUrls = storedPhotos.map(p => ({
-                ...p,
-                url: p.file ? URL.createObjectURL(p.file) : '',
-            })).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-            setAllPhotos(photosWithUrls);
+            
+            setAllPhotos(storedPhotos);
 
             if (storedProfiles.length > 0) {
-                const profilesWithUrls = storedProfiles.map(p => ({
-                    ...p,
-                    url: p.file ? URL.createObjectURL(p.file) : null,
-                }));
-                // Merge with default profiles if needed, or just set
-                setProfiles(prev => prev.map(dp => profilesWithUrls.find(sp => sp.id === dp.id) || dp));
+                setProfiles(prev => {
+                    const profileMap = new Map(storedProfiles.map(p => [p.id, p]));
+                    return prev.map(dp => profileMap.get(dp.id) || dp);
+                });
             }
 
         } catch (error) {
-            console.error("Failed to load data from IndexedDB", error);
+            console.error("Failed to load data from Firebase", error);
+            alert("데이터를 불러오는 데 실패했습니다. firebase.ts 파일에 Firebase 설정이 올바르게 입력되었는지, 그리고 Firestore와 Storage의 보안 규칙이 데이터 접근을 허용하는지 확인해주세요.");
         }
         setIsLoading(false);
         setIsInitialLoad(false);
@@ -150,9 +153,6 @@ const App: React.FC = () => {
 
     loadData();
 
-    return () => {
-        allPhotos.forEach(photo => URL.revokeObjectURL(photo.url));
-    }
   }, [accessGranted]);
 
   const existingPhotoIds = useMemo(() => new Set(allPhotos.map(p => p.id)), [allPhotos]);
@@ -184,18 +184,24 @@ const App: React.FC = () => {
         newPhotoIds.add(photoId);
         
         const date = await getExifDate(file);
-        const url = URL.createObjectURL(file);
-        const photo: Photo = {
+        
+        const photoToUpload: Photo = {
             id: photoId,
-            url,
+            url: '', // Will be replaced by cloud URL
             file,
             name: file.name,
             date,
             type: file.type.startsWith('video/') ? 'video' : 'image',
         };
         
-        await addPhoto(photo);
-        newPhotos.push(photo);
+        try {
+            const savedPhoto = await addPhoto(photoToUpload);
+            newPhotos.push(savedPhoto);
+        } catch (error) {
+            console.error("Stopping upload due to storage error:", error);
+            alert("파일 업로드 중 오류가 발생했습니다. 콘솔을 확인해주세요.");
+            break; 
+        }
         setUploadProgress(prev => ({ ...prev, processed: prev.processed + 1 }));
     }
 
@@ -207,10 +213,21 @@ const App: React.FC = () => {
   }, [existingPhotoIds]);
   
   const handleProfileDrop = useCallback(async (id: number, file: File) => {
-      const url = URL.createObjectURL(file);
-      const profile: Profile = { id, url, file };
-      await saveProfile(profile);
-      setProfiles(prev => prev.map(p => p.id === id ? { ...p, url } : p));
+      try {
+        const tempUrl = URL.createObjectURL(file);
+        // Optimistically update UI
+        setProfiles(prev => prev.map(p => p.id === id ? { ...p, url: tempUrl } : p));
+        
+        const profile: Profile = { id, url: '', file };
+        const savedProfile = await saveProfile(profile);
+
+        // Update with final cloud URL
+        setProfiles(prev => prev.map(p => p.id === id ? savedProfile : p));
+        URL.revokeObjectURL(tempUrl);
+      } catch (error) {
+        console.error("Failed to save profile:", error);
+        alert("프로필 사진 저장에 실패했습니다.");
+      }
   }, []);
 
   const photosByYear = useMemo(() => {
@@ -270,11 +287,22 @@ const App: React.FC = () => {
         }
 
         const zip = new JSZip();
-        photosToZip.forEach(photo => {
-            if (photo.file) {
-                zip.file(photo.name, photo.file);
-            }
-        });
+        
+        const downloadPromises = photosToZip.map(photo =>
+            fetch(photo.url)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`Failed to fetch ${photo.name}. Check CORS settings in Firebase Storage.`);
+                    }
+                    return response.blob();
+                })
+                .then(blob => {
+                    zip.file(photo.name, blob);
+                })
+                .catch(error => console.error(`Failed to download ${photo.name}:`, error))
+        );
+
+        await Promise.all(downloadPromises);
 
         const content = await zip.generateAsync({ type: "blob" });
 
@@ -290,7 +318,7 @@ const App: React.FC = () => {
         setSelectedPhotos(new Set());
     } catch (error) {
         console.error("다운로드 중 오류 발생:", error);
-        alert("사진을 다운로드하는 중 오류가 발생했습니다.");
+        alert("사진을 다운로드하는 중 오류가 발생했습니다. Firebase Storage의 CORS 설정이 올바르게 되었는지 확인해주세요.");
     } finally {
         setIsZipping(false);
     }
@@ -447,8 +475,12 @@ const App: React.FC = () => {
           )}
 
           {!isLoading && !isInitialLoad && allPhotos.length === 0 && (
-            <div className="text-center py-16">
-              <p className="text-slate-500 text-lg">업로드한 사진과 동영상이 여기에 표시됩니다.</p>
+            <div className="text-center py-16 px-4">
+              <div className="max-w-md mx-auto bg-slate-800/50 p-8 rounded-xl border border-slate-700">
+                <EmptyAlbumIcon />
+                <h3 className="text-2xl font-bold text-slate-200">앨범이 비어있습니다</h3>
+                <p className="text-slate-400 mt-2">첫 사진을 업로드하여 추억을 기록해보세요.</p>
+              </div>
             </div>
           )}
           
@@ -494,7 +526,7 @@ const App: React.FC = () => {
                             {photo.type === 'video' && !isSelectionMode && (
                                 <div className="absolute top-2 right-2 text-white bg-black bg-opacity-50 p-1 rounded-full">
                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                                        <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 001.553.832l3-2a1 1 0 000-1.664l-3-2z" />
+                                        <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2-2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 001.553.832l3-2a1 1 0 000-1.664l-3-2z" />
                                     </svg>
                                 </div>
                             )}
