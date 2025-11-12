@@ -1,9 +1,9 @@
 export interface Photo {
   id: string;
   url: string;
-  file?: File; // To handle the file object for storage
+  storagePath: string; // To handle file deletion from Firebase Storage
   name: string;
-  date: Date;
+  date: string; // ISO string format for Firestore compatibility
   type: 'image' | 'video';
 }
 
@@ -12,5 +12,5 @@ export type GroupedPhotos = Record<number, Record<string, Photo[]>>;
 export interface Profile {
   id: number;
   url: string | null;
-  file?: File; // To handle the file object for storage
+  storagePath?: string; // To handle file deletion from Firebase Storage
 }
