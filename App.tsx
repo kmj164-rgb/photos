@@ -1,10 +1,10 @@
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import type { Photo, Profile, GroupedPhotos } from './types';
 import PhotoModal from './components/PhotoModal';
-import { firestore, storage } from './firebase';
+import { getAllPhotos, addPhoto, getAllProfiles, saveProfile, deletePhotos, getPhotosByIds, deletePhoto } from './db';
 
 declare const EXIF: any;
-declare const JSZip: any;
 
 const MONTHS = ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'];
 const YEARS = Array.from({ length: 2030 - 2010 + 1 }, (_, i) => 2010 + i);
@@ -48,21 +48,21 @@ const CheckCircleIcon: React.FC = () => (
     </svg>
 );
 
-const DownloadIcon: React.FC = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-        <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
-    </svg>
-);
-
-const TrashIcon: React.FC = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-        <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
-    </svg>
-);
-
 
 const ProfileCircle: React.FC<{ profile: Profile; onImageDrop: (id: number, file: File) => void }> = ({ profile, onImageDrop }) => {
     const [isDragOver, setIsDragOver] = useState(false);
+    const [profileUrl, setProfileUrl] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (profile.file) {
+            const url = URL.createObjectURL(profile.file);
+            setProfileUrl(url);
+            return () => URL.revokeObjectURL(url);
+        } else if (profile.url) {
+            setProfileUrl(profile.url)
+        }
+    }, [profile.file, profile.url]);
+
 
     const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
         e.preventDefault();
@@ -89,12 +89,12 @@ const ProfileCircle: React.FC<{ profile: Profile; onImageDrop: (id: number, file
             onDragLeave={handleDragLeave}
             className={`relative w-24 h-24 sm:w-28 sm:h-28 rounded-full border-4 border-dashed flex items-center justify-center text-center text-xs p-2 transition-all duration-300 ${isDragOver ? 'border-sky-400 bg-slate-700' : 'border-slate-600'}`}
             style={{
-                backgroundImage: `url(${profile.url})`,
+                backgroundImage: `url(${profileUrl})`,
                 backgroundSize: 'cover',
                 backgroundPosition: 'center',
             }}
         >
-            {!profile.url && <span className="text-slate-400">여기에 사진 드롭</span>}
+            {!profileUrl && <span className="text-slate-400">여기에 사진 드롭</span>}
         </div>
     );
 };
@@ -119,7 +119,10 @@ const App: React.FC = () => {
   const [filterType, setFilterType] = useState<'all' | 'image' | 'video'>('all');
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedPhotos, setSelectedPhotos] = useState<Set<string>>(new Set());
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
+  
+  const photoUrlsRef = useRef(photoUrls);
+  photoUrlsRef.current = photoUrls;
 
   useEffect(() => {
     if (localStorage.getItem('albumAccessGranted') === 'true') {
@@ -130,35 +133,53 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!accessGranted) return;
 
-    // Listen for real-time updates from Firestore
-    const unsubscribePhotos = firestore.collection('photos').orderBy('date', 'desc').onSnapshot(snapshot => {
-        const photosFromDb = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data(),
-        } as Photo));
-        setAllPhotos(photosFromDb);
+    const loadData = async () => {
+        setIsLoading(true);
+        try {
+            const [storedPhotos, storedProfiles] = await Promise.all([getAllPhotos(), getAllProfiles()]);
+            
+            const sortedPhotos = storedPhotos.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+            setAllPhotos(sortedPhotos);
+
+            if (storedProfiles.length > 0) {
+                setProfiles(prev => {
+                    const profileMap = new Map(storedProfiles.map(p => [p.id, p]));
+                    return prev.map(dp => profileMap.get(dp.id) || dp);
+                });
+            }
+
+        } catch (error) {
+            console.error("Failed to load data from IndexedDB", error);
+        }
         setIsLoading(false);
         setIsInitialLoad(false);
-    }, (error: Error) => {
-        console.error("Error fetching photos from Firestore:", error);
-        setIsLoading(false);
-    });
+    };
+
+    loadData();
     
-    const unsubscribeProfiles = firestore.collection('profiles').onSnapshot(snapshot => {
-        const profilesFromDb: Profile[] = [];
-        snapshot.forEach(doc => {
-            profilesFromDb.push({ id: Number(doc.id), ...doc.data() } as Profile)
-        });
-        if (profilesFromDb.length > 0) {
-             setProfiles(prev => prev.map(dp => profilesFromDb.find(sp => sp.id === dp.id) || dp));
+    return () => {
+       Object.values(photoUrlsRef.current).forEach(URL.revokeObjectURL);
+    }
+
+  }, [accessGranted]);
+
+  useEffect(() => {
+    const newUrls: Record<string, string> = {};
+    let needsUpdate = false;
+    allPhotos.forEach(photo => {
+        if (photo.file && !photoUrls[photo.id]) {
+            newUrls[photo.id] = URL.createObjectURL(photo.file);
+            needsUpdate = true;
         }
     });
 
-    return () => {
-        unsubscribePhotos();
-        unsubscribeProfiles();
+    if (needsUpdate) {
+        setPhotoUrls(prev => ({ ...prev, ...newUrls }));
     }
-  }, [accessGranted]);
+  }, [allPhotos, photoUrls]);
+
+
+  const existingPhotoIds = useMemo(() => new Set(allPhotos.map(p => p.id)), [allPhotos]);
   
   const handleFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -167,60 +188,56 @@ const App: React.FC = () => {
     setIsLoading(true);
     setUploadProgress({ processed: 0, total: files.length });
     setCurrentFileName(null);
-    setSkippedCount(0); // Reset skipped count for new upload session
-
-    const uploadPromises = [];
+    setSkippedCount(0);
+    
+    const newPhotos: Photo[] = [];
+    let skipped = 0;
+    const newPhotoIds = new Set<string>();
 
     for (let i = 0; i < files.length; i++) {
         const file = files[i];
+        setCurrentFileName(file.name);
         
-        const uploadProcess = async () => {
-            setCurrentFileName(file.name);
-            const date = await getExifDate(file);
-            
-            // Upload to Firebase Storage
-            const storageRef = storage.ref(`photos/${Date.now()}_${file.name}`);
-            await storageRef.put(file);
-            const downloadURL = await storageRef.getDownloadURL();
-
-            // Save metadata to Firestore
-            const photoData = {
-                name: file.name,
-                date: date.toISOString(),
-                type: file.type.startsWith('video/') ? 'video' : 'image',
-                url: downloadURL,
-                storagePath: storageRef.fullPath
-            };
-            
-            await firestore.collection('photos').add(photoData);
-
+        const photoId = `${file.name}-${file.size}-${file.lastModified}`;
+        if (existingPhotoIds.has(photoId) || newPhotoIds.has(photoId)) {
+            skipped++;
+            setSkippedCount(skipped);
             setUploadProgress(prev => ({ ...prev, processed: prev.processed + 1 }));
+            continue;
+        }
+        newPhotoIds.add(photoId);
+        
+        const date = await getExifDate(file);
+        const photo: Photo = {
+            id: photoId,
+            url: '', // URL is generated on demand
+            file,
+            name: file.name,
+            date,
+            type: file.type.startsWith('video/') ? 'video' : 'image',
         };
-        uploadPromises.push(uploadProcess());
+        
+        try {
+            await addPhoto(photo);
+            newPhotos.push(photo);
+        } catch (error) {
+            console.error(`Failed to add photo ${photo.name} to DB:`, error);
+            alert(`${photo.name}을(를) 저장하는 데 실패했습니다.`);
+        }
+        setUploadProgress(prev => ({ ...prev, processed: prev.processed + 1 }));
     }
 
-    await Promise.all(uploadPromises);
-
+    setAllPhotos(prev => [...prev, ...newPhotos].sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
     setIsLoading(false);
     setCurrentFileName(null);
     
     event.target.value = '';
-  }, []);
+  }, [existingPhotoIds]);
   
   const handleProfileDrop = useCallback(async (id: number, file: File) => {
-      try {
-        const storageRef = storage.ref(`profiles/${id}_${file.name}`);
-        await storageRef.put(file);
-        const downloadURL = await storageRef.getDownloadURL();
-        const profileData = {
-            url: downloadURL,
-            storagePath: storageRef.fullPath
-        };
-        await firestore.collection('profiles').doc(String(id)).set(profileData, { merge: true });
-        // Real-time listener will update the state
-      } catch (error) {
-        console.error("Error updating profile picture:", error);
-      }
+      const profile: Profile = { id, url: null, file };
+      await saveProfile(profile);
+      setProfiles(prev => prev.map(p => p.id === id ? profile : p));
   }, []);
 
   const photosByYear = useMemo(() => {
@@ -243,88 +260,42 @@ const App: React.FC = () => {
       return monthlyPhotos.filter(p => p.type === filterType);
   }, [selectedYear, selectedMonth, photosByYear, filterType]);
 
+  const getPhotoUrl = useCallback((photo: Photo) => {
+    return photoUrls[photo.id] || '';
+  }, [photoUrls]);
+
+  const photosInCurrentViewWithUrls = useMemo(() => {
+      return photosInCurrentView.map(p => ({
+          ...p,
+          url: getPhotoUrl(p),
+      }));
+  }, [photosInCurrentView, getPhotoUrl]);
+
   const handlePhotoClick = (photo: Photo) => {
-      if (isSelectionMode) {
-          const newSelectedPhotos = new Set(selectedPhotos);
-          if (newSelectedPhotos.has(photo.id)) {
-              newSelectedPhotos.delete(photo.id);
-          } else {
-              newSelectedPhotos.add(photo.id);
-          }
-          setSelectedPhotos(newSelectedPhotos);
-      } else {
-          const index = photosInCurrentView.findIndex(p => p.id === photo.id);
-          if (index !== -1) {
-              setSelectedPhotoIndex(index);
-          }
+      if(isSelectionMode) {
+        handlePhotoSelect(photo.id);
+        return;
+      }
+      const index = photosInCurrentViewWithUrls.findIndex(p => p.id === photo.id);
+      if (index !== -1) {
+          setSelectedPhotoIndex(index);
       }
   };
-
-  const handleToggleSelectionMode = () => {
-      if (isSelectionMode) {
-          setSelectedPhotos(new Set());
-      }
-      setIsSelectionMode(!isSelectionMode);
-  };
-
-  const handleDownloadSelected = async () => {
-    if (selectedPhotos.size === 0) return;
-    setIsProcessing(true);
-
-    try {
-        const zip = new JSZip();
-        const photosToDownload = allPhotos.filter(p => selectedPhotos.has(p.id));
-
-        const downloadPromises = photosToDownload.map(async (photo) => {
-            const response = await fetch(photo.url);
-            const blob = await response.blob();
-            zip.file(photo.name, blob);
-        });
-
-        await Promise.all(downloadPromises);
-        
-        const content = await zip.generateAsync({ type: "blob" });
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(content);
-        link.download = `album_photos_${new Date().toISOString().slice(0,10)}.zip`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(link.href);
-    } catch (error) {
-        console.error("Error creating zip file", error);
-    } finally {
-        setIsProcessing(false);
-    }
-  };
-
-  const handleDeleteSelected = async () => {
-      if (selectedPhotos.size === 0) return;
-      if (!window.confirm(`${selectedPhotos.size}개의 항목을 정말로 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.`)) {
-          return;
-      }
-      setIsProcessing(true);
-      try {
-          const photosToDelete = allPhotos.filter(p => selectedPhotos.has(p.id));
-          const deletePromises = photosToDelete.map(photo => {
-              const firestorePromise = firestore.collection('photos').doc(photo.id).delete();
-              const storagePromise = storage.ref(photo.storagePath).delete();
-              return Promise.all([firestorePromise, storagePromise]);
-          });
-          
-          await Promise.all(deletePromises);
-          
-          setSelectedPhotos(new Set());
-          setIsSelectionMode(false);
-      } catch (error) {
-          console.error("Failed to delete photos", error);
-      } finally {
-          setIsProcessing(false);
-      }
+  
+  const handlePhotoSelect = (photoId: string) => {
+    setSelectedPhotos(prev => {
+        const newSelection = new Set(prev);
+        if (newSelection.has(photoId)) {
+            newSelection.delete(photoId);
+        } else {
+            newSelection.add(photoId);
+        }
+        return newSelection;
+    });
   };
 
   const handleNavigateModal = (newIndex: number) => {
-    if (newIndex >= 0 && newIndex < photosInCurrentView.length) {
+    if (newIndex >= 0 && newIndex < photosInCurrentViewWithUrls.length) {
         setSelectedPhotoIndex(newIndex);
     }
   };
@@ -334,6 +305,92 @@ const App: React.FC = () => {
     setSelectedMonth(null);
     setIsSelectionMode(false);
     setSelectedPhotos(new Set());
+  }
+
+  const handleMonthSelect = (month: string) => {
+    setSelectedMonth(month);
+    setIsSelectionMode(false);
+    setSelectedPhotos(new Set());
+  }
+  
+  const handleToggleSelectionMode = () => {
+    setIsSelectionMode(prev => !prev);
+    setSelectedPhotos(new Set());
+  }
+
+  const handleSelectAll = () => {
+    if(selectedPhotos.size === photosInCurrentView.length) {
+        setSelectedPhotos(new Set());
+    } else {
+        setSelectedPhotos(new Set(photosInCurrentView.map(p => p.id)));
+    }
+  }
+  
+  const handleDeleteSelected = async () => {
+    if (selectedPhotos.size === 0) return;
+    if(window.confirm(`${selectedPhotos.size}개의 항목을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.`)) {
+        const idsToDelete = Array.from(selectedPhotos);
+        try {
+            await deletePhotos(idsToDelete);
+            setPhotoUrls(prevUrls => {
+                const newUrls = { ...prevUrls };
+                idsToDelete.forEach(id => {
+                    if (newUrls[id]) {
+                        URL.revokeObjectURL(newUrls[id]);
+                        delete newUrls[id];
+                    }
+                });
+                return newUrls;
+            });
+            setAllPhotos(prev => prev.filter(p => !idsToDelete.includes(p.id)));
+            setSelectedPhotos(new Set());
+            setIsSelectionMode(false);
+        } catch (error) {
+            console.error("Failed to delete photos:", error);
+            alert("사진 삭제에 실패했습니다.");
+        }
+    }
+  };
+  
+  const handleDownloadSelected = async () => {
+    if (selectedPhotos.size === 0) return;
+    const idsToDownload = Array.from(selectedPhotos);
+    try {
+      const photosToDownload = await getPhotosByIds(idsToDownload);
+      photosToDownload.forEach(photo => {
+        if (photo.file) {
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(photo.file);
+          a.download = photo.name;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(a.href);
+        }
+      });
+    } catch (error) {
+      console.error("Failed to download photos:", error);
+      alert("사진 다운로드에 실패했습니다.");
+    }
+  }
+  
+  const handleDeleteFromModal = async (photoId: string) => {
+      try {
+          await deletePhoto(photoId);
+          setPhotoUrls(prevUrls => {
+            const newUrls = { ...prevUrls };
+            if (newUrls[photoId]) {
+                URL.revokeObjectURL(newUrls[photoId]);
+                delete newUrls[photoId];
+            }
+            return newUrls;
+          });
+          setAllPhotos(prev => prev.filter(p => p.id !== photoId));
+          setSelectedPhotoIndex(null);
+      } catch (error) {
+          console.error("Failed to delete photo:", error);
+          alert("사진 삭제에 실패했습니다.");
+      }
   }
 
   const handleRequestAccess = () => {
@@ -371,13 +428,17 @@ const App: React.FC = () => {
 
   return (
     <>
-      <div className="min-h-screen bg-slate-900 text-slate-100 font-sans">
+      <div className="min-h-screen bg-slate-900 text-slate-100 font-sans pb-24">
         <main className="container mx-auto px-4 py-8">
+          <div className="text-center p-4 mb-8 bg-slate-800/50 rounded-lg border border-slate-700">
+              <p className="text-sm text-sky-300">초대된 가족과 친구만 볼 수 있는 소중한 순간들</p>
+          </div>
+
           <header className="text-center mb-10 flex flex-col sm:flex-row items-center justify-center gap-6 sm:gap-10">
             <ProfileCircle profile={profiles[0]} onImageDrop={handleProfileDrop} />
             <div>
                 <h1 className="text-4xl md:text-5xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-blue-500">
-                우리가족 행복 앨범
+                두아들을 둔 행복한 집
                 </h1>
                 <p className="mt-4 text-lg text-slate-400">
                 우리의 모든 순간, 모든 이야기
@@ -398,9 +459,7 @@ const App: React.FC = () => {
           </div>
 
           {isLoading && isInitialLoad && (
-             <div className="text-center py-16">
-              <p className="text-slate-500 text-lg">앨범 데이터를 불러오는 중입니다...</p>
-            </div>
+            <div className="text-center text-lg text-slate-400 p-8">앨범 데이터를 불러오는 중입니다...</div>
           )}
 
           {isLoading && !isInitialLoad && (
@@ -444,7 +503,7 @@ const App: React.FC = () => {
                        {MONTHS.map(month => {
                            const hasPhotos = photosByYear[selectedYear]?.[month]?.length > 0;
                            return (
-                            <button key={month} onClick={() => setSelectedMonth(month)} disabled={!hasPhotos} className={`px-3 py-1.5 rounded text-sm transition-colors ${selectedMonth === month ? 'bg-sky-500 text-white' : 'bg-slate-700'} ${hasPhotos ? 'hover:bg-slate-600' : 'opacity-50 cursor-not-allowed'}`}>
+                            <button key={month} onClick={() => handleMonthSelect(month)} disabled={!hasPhotos} className={`px-3 py-1.5 rounded text-sm transition-colors ${selectedMonth === month ? 'bg-sky-500 text-white' : 'bg-slate-700'} ${hasPhotos ? 'hover:bg-slate-600' : 'opacity-50 cursor-not-allowed'}`}>
                                 {month}
                             </button>
                            )
@@ -454,7 +513,7 @@ const App: React.FC = () => {
           </nav>
           
           {selectedYear && selectedMonth && (
-            <div className="flex justify-center items-center gap-4 mb-8">
+            <div className="flex justify-center gap-4 mb-8">
               <button onClick={() => setFilterType('all')} className={`px-4 py-2 rounded font-semibold transition-colors ${filterType === 'all' ? 'bg-sky-500 text-white' : 'bg-slate-700 hover:bg-slate-600'}`}>
                 모두
               </button>
@@ -464,14 +523,6 @@ const App: React.FC = () => {
               <button onClick={() => setFilterType('video')} className={`px-4 py-2 rounded font-semibold transition-colors ${filterType === 'video' ? 'bg-sky-500 text-white' : 'bg-slate-700 hover:bg-slate-600'}`}>
                 동영상
               </button>
-              {photosInCurrentView.length > 0 && (
-                <>
-                  <div className="border-l border-slate-600 h-6"></div>
-                  <button onClick={handleToggleSelectionMode} className={`px-4 py-2 rounded font-semibold transition-colors ${isSelectionMode ? 'bg-red-500 text-white' : 'bg-sky-500 text-white'}`}>
-                    {isSelectionMode ? '취소' : '선택'}
-                  </button>
-                </>
-              )}
             </div>
           )}
 
@@ -492,70 +543,76 @@ const App: React.FC = () => {
           )}
 
           {!isLoading && selectedYear && selectedMonth && photosInCurrentView.length > 0 && (
-            <section className="pb-24">
-                <h2 className="text-3xl font-bold text-sky-400 border-b-2 border-slate-700 pb-2 mb-6">
-                    {selectedYear}년 {selectedMonth}
-                </h2>
+            <section>
+                <div className="flex justify-between items-center border-b-2 border-slate-700 pb-2 mb-6">
+                    <h2 className="text-3xl font-bold text-sky-400">
+                        {selectedYear}년 {selectedMonth}
+                    </h2>
+                    <button onClick={handleToggleSelectionMode} className="px-4 py-2 rounded font-semibold transition-colors bg-slate-700 hover:bg-slate-600">
+                        {isSelectionMode ? '취소' : '선택'}
+                    </button>
+                </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-                    {photosInCurrentView.map(photo => {
-                        const isSelected = selectedPhotos.has(photo.id);
-                        return (
-                            <div key={photo.id} className="aspect-square bg-slate-800 rounded-lg overflow-hidden group relative" onClick={() => handlePhotoClick(photo)}>
-                                <div className={`w-full h-full transition-transform duration-300 ${isSelectionMode ? 'cursor-pointer' : ''} ${isSelected ? 'scale-90' : 'group-hover:scale-105'}`}>
-                                    {photo.type === 'image' ? (
-                                        <img src={photo.url} alt={photo.name} className="w-full h-full object-cover"/>
-                                    ) : (
-                                        <video src={photo.url} muted loop className="w-full h-full object-cover" />
-                                    )}
-                                </div>
-                                
-                                {isSelectionMode ? (
-                                    <div className={`absolute inset-0 flex items-center justify-center transition-all duration-200 ${isSelected ? 'bg-sky-500/70' : 'bg-black/50 opacity-0 group-hover:opacity-100'}`}>
-                                        {isSelected && <CheckCircleIcon />}
-                                    </div>
-                                ) : (
-                                    <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-40 transition-opacity duration-300"></div>
-                                )}
-                                
-                                {photo.type === 'video' && !isSelected && (
-                                     <div className="absolute top-2 right-2 text-white bg-black bg-opacity-50 p-1 rounded-full">
-                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                                            <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 001.553.832l3-2a1 1 0 000-1.664l-3-2z" />
-                                        </svg>
+                    {photosInCurrentViewWithUrls.map(photo => (
+                    <div key={photo.id} className="aspect-square bg-slate-800 rounded-lg overflow-hidden cursor-pointer group relative" onClick={() => handlePhotoClick(photo)}>
+                        {photo.type === 'image' ? (
+                            <img src={photo.url} alt={photo.name} loading="lazy" className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"/>
+                        ) : (
+                            <video src={photo.url} muted loop className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300" />
+                        )}
+
+                        {isSelectionMode ? (
+                             <div className={`absolute inset-0 transition-all duration-200 ${selectedPhotos.has(photo.id) ? 'bg-sky-500/70' : 'bg-black/50'}`}>
+                                {selectedPhotos.has(photo.id) && (
+                                    <div className="absolute top-2 right-2 text-white bg-sky-600 rounded-full p-1">
+                                      <CheckCircleIcon />
                                     </div>
                                 )}
+                             </div>
+                        ) : (
+                             <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-40 transition-opacity duration-300"></div>
+                        )}
+
+                        {photo.type === 'video' && (
+                             <div className="absolute top-2 right-2 text-white bg-black bg-opacity-50 p-1 rounded-full">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                    <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 001.553.832l3-2a1 1 0 000-1.664l-3-2z" />
+                                </svg>
                             </div>
-                        );
-                    })}
+                        )}
+                    </div>
+                    ))}
                 </div>
             </section>
           )}
-
         </main>
       </div>
-
-      <div className={`fixed bottom-0 left-0 right-0 z-40 bg-slate-800/80 backdrop-blur-sm border-t border-slate-700 shadow-lg p-4 transition-transform duration-300 ease-in-out ${isSelectionMode && selectedPhotos.size > 0 ? 'translate-y-0' : 'translate-y-full'}`}>
-          <div className="container mx-auto flex justify-between items-center">
-              <span className="font-semibold text-lg">{selectedPhotos.size}개 항목 선택됨</span>
-              <div className="flex gap-4">
-                  <button onClick={handleDownloadSelected} disabled={isProcessing} className="flex items-center justify-center bg-sky-500 hover:bg-sky-600 text-white font-bold py-2 px-4 rounded-lg transition-colors disabled:opacity-50">
-                      <DownloadIcon />
-                      {isProcessing ? '압축 중...' : '다운로드'}
-                  </button>
-                  <button onClick={handleDeleteSelected} disabled={isProcessing} className="flex items-center justify-center bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg transition-colors disabled:opacity-50">
-                      <TrashIcon />
-                      {isProcessing ? '삭제 중...' : '삭제'}
-                  </button>
+      {isSelectionMode && (
+          <div className="fixed bottom-0 left-0 right-0 bg-slate-800/90 backdrop-blur-sm border-t border-slate-700 p-4 z-40">
+              <div className="container mx-auto flex justify-between items-center">
+                  <div className="text-white font-semibold">
+                      {selectedPhotos.size}개 선택됨
+                  </div>
+                  <div className="flex gap-4">
+                      <button onClick={handleSelectAll} className="px-4 py-2 rounded font-semibold bg-slate-600 hover:bg-slate-500 text-white transition-colors">
+                          {selectedPhotos.size === photosInCurrentView.length ? '선택 해제' : '모두 선택'}
+                      </button>
+                      <button onClick={handleDownloadSelected} disabled={selectedPhotos.size === 0} className="px-4 py-2 rounded font-semibold bg-sky-500 hover:bg-sky-600 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                          다운로드
+                      </button>
+                      <button onClick={handleDeleteSelected} disabled={selectedPhotos.size === 0} className="px-4 py-2 rounded font-semibold bg-red-600 hover:bg-red-700 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                          삭제
+                      </button>
+                  </div>
               </div>
           </div>
-      </div>
-
-{/* FIX: The `photos` prop for PhotoModal expects an array of `Photo` objects, where `date` is a string. The previous code was incorrectly converting the `date` string to a `Date` object, causing a type mismatch. The `map` function has been removed to pass the `photosInCurrentView` array directly, as the `PhotoModal` component handles date string conversion internally. */}
+      )}
       <PhotoModal 
-        photos={photosInCurrentView} 
+        photos={photosInCurrentViewWithUrls} 
         currentIndex={selectedPhotoIndex} 
         onClose={() => setSelectedPhotoIndex(null)}
         onNavigate={handleNavigateModal}
+        onDelete={handleDeleteFromModal}
       />
     </>
   );
