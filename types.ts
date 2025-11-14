@@ -5,6 +5,8 @@ export interface Photo {
   name: string;
   date: Date;
   type: 'image' | 'video';
+  size: number;
+  lastModified: number;
 }
 
 // FIX: Changed GroupedPhotos to group by month string key, which is how it's used for rendering.

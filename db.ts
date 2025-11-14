@@ -22,6 +22,8 @@ export const addPhoto = async (photo: Photo): Promise<Photo> => {
         date: new Date(photo.date),
         type: photo.type,
         url: url,
+        size: photo.size,
+        lastModified: photo.lastModified,
     };
     
     const docRef = await photoCollection.add(storablePhotoData);
@@ -45,6 +47,8 @@ export const getAllPhotos = async (): Promise<Photo[]> => {
             url: data.url,
             date: data.date.toDate(),
             type: data.type,
+            size: data.size || 0,
+            lastModified: data.lastModified || 0,
         } as Photo;
     });
 };

@@ -71,6 +71,7 @@ const App: React.FC = () => {
     const [isUploading, setIsUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
     const [totalFiles, setTotalFiles] = useState(0);
+    const [skippedFiles, setSkippedFiles] = useState(0);
     const [error, setError] = useState<string | null>(null);
     const [selectedPhotos, setSelectedPhotos] = useState<Set<string>>(new Set());
     const [isDragOver, setIsDragOver] = useState(false);
@@ -117,14 +118,33 @@ const App: React.FC = () => {
         }
     }, [loadPhotos, loadProfiles]);
 
+    const existingPhotoIds = useMemo(() => new Set(
+        photos.map(p => `${p.name}-${p.size}-${p.lastModified}`)
+    ), [photos]);
+
     const processFiles = useCallback(async (files: File[]) => {
+        const filesToUpload = files.filter(file => {
+            const fileId = `${file.name}-${file.size}-${file.lastModified}`;
+            return !existingPhotoIds.has(fileId);
+        });
+
+        const skippedCount = files.length - filesToUpload.length;
+        setSkippedFiles(skippedCount);
+
+        if (filesToUpload.length === 0) {
+            if (skippedCount > 0) {
+                alert(`${skippedCount}개의 파일을 선택했지만, 모두 이미 앨범에 있는 파일입니다.`);
+            }
+            return;
+        }
+
         setIsUploading(true);
-        setTotalFiles(files.length);
+        setTotalFiles(filesToUpload.length);
         setUploadProgress(0);
         
         let completed = 0;
 
-        const uploadQueue = Array.from(files);
+        const uploadQueue = Array.from(filesToUpload);
 
         const worker = async () => {
             while(uploadQueue.length > 0) {
@@ -139,6 +159,8 @@ const App: React.FC = () => {
                     name: file.name,
                     date: date,
                     type: file.type.startsWith('image/') ? 'image' : 'video',
+                    size: file.size,
+                    lastModified: file.lastModified,
                 };
                 
                 try {
@@ -158,7 +180,7 @@ const App: React.FC = () => {
         await Promise.all(workers);
 
         setIsUploading(false);
-    }, [loadPhotos]);
+    }, [existingPhotoIds]);
 
     const handleFileChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
         const files = event.target.files;
@@ -349,8 +371,11 @@ const App: React.FC = () => {
                     <div className="m-4 md:m-8 p-4 bg-slate-800 rounded-lg">
                         <p className="text-lg font-semibold mb-2">업로드 중... ({uploadProgress}/{totalFiles})</p>
                         <div className="w-full bg-slate-700 rounded-full h-4">
-                            <div className="bg-sky-500 h-4 rounded-full" style={{ width: `${(uploadProgress / totalFiles) * 100}%` }}></div>
+                            <div className="bg-sky-500 h-4 rounded-full" style={{ width: totalFiles > 0 ? `${(uploadProgress / totalFiles) * 100}%` : '0%' }}></div>
                         </div>
+                        {skippedFiles > 0 && (
+                            <p className="text-sm text-slate-400 mt-2">{skippedFiles}개의 중복 파일은 건너뛰었습니다.</p>
+                        )}
                     </div>
                 )}
                 
