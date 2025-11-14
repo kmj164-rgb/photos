@@ -7,7 +7,8 @@ export interface Photo {
   type: 'image' | 'video';
 }
 
-export type GroupedPhotos = Record<number, Record<string, Photo[]>>;
+// FIX: Changed GroupedPhotos to group by month string key, which is how it's used for rendering.
+export type GroupedPhotos = Record<string, Photo[]>;
 
 export interface Profile {
   id: number;
